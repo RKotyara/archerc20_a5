@@ -1,0 +1,59 @@
+name: Build OpenWrt 25.12.6 - Archer C20 v5
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Download official OpenWrt ImageBuilder
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL="https://downloads.openwrt.org/releases/25.12.6/targets/ramips/mt76x8/openwrt-imagebuilder-25.12.6-ramips-mt76x8.Linux-x86_64.tar.zst"
+          SHA256="7f26c50440cadd83362c444778f80f4a214ee76f3c192ef85ef074f2c56d89ec"
+          wget -O imagebuilder.tar.zst "$URL"
+          echo "$SHA256  imagebuilder.tar.zst" | sha256sum -c -
+          mkdir imagebuilder
+          tar --zstd -xf imagebuilder.tar.zst -C imagebuilder --strip-components=1
+
+      - name: Build firmware for the exact device profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd imagebuilder
+
+          PROFILE="tplink_archer-c20-v5"
+          PACKAGES="luci luci-ssl luci-i18n-base-ru luci-proto-ppp ppp-mod-pppoe tcpdump ethtool iw ip-full curl ca-bundle htop"
+
+          echo "Checking that the selected profile exists..."
+          make info | grep -F "$PROFILE"
+
+          echo "Building $PROFILE with packages: $PACKAGES"
+          make image PROFILE="$PROFILE" PACKAGES="$PACKAGES"
+
+          IMAGE="$(find bin/targets/ramips/mt76x8 -maxdepth 1 -type f -name '*tplink_archer-c20-v5*squashfs-sysupgrade.bin' -print -quit)"
+          test -n "$IMAGE"
+          SIZE="$(stat -c '%s' "$IMAGE")"
+          MAX_SIZE=$((7616 * 1024))
+          echo "Image: $IMAGE"
+          echo "Size: $SIZE bytes (limit: $MAX_SIZE bytes)"
+          test "$SIZE" -le "$MAX_SIZE"
+
+          mkdir -p ../output
+          cp "$IMAGE" ../output/
+          sha256sum ../output/*.bin | tee ../output/SHA256SUMS
+          cp bin/targets/ramips/mt76x8/*manifest ../output/ || true
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-25.12.6-archer-c20-v5
+          path: output/
+          if-no-files-found: error
+          retention-days: 30
